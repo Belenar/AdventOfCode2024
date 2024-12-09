@@ -4,41 +4,33 @@ class Program
 {
     static void Main()
     {
-        var (map, guard) = ParseInput();
-
-        List<ObstaclePosition> obstaclePositions = [];
-
-        while (!IsLeavingMap(guard, map))
-        {
-            var (newGuard, obstaclePosition) = MoveGuard(guard, map);
-            if(obstaclePosition != null && !obstaclePositions.Contains(obstaclePosition))
-                obstaclePositions.Add(obstaclePosition);
-            guard = newGuard;
-        }
+        var (map, startPosition) = ParseInput();
         
-        Console.WriteLine($"There are {obstaclePositions.Count} obstacle positions that would cause a loop.");
-    }
-
-    private static bool IsLeavingMap(GuardPosition guard, char[][] map)
-    {
-        return guard.Direction switch
+        var guard = startPosition;
+        
+        List<GridPosition> possibleObstaclePositions = [];
+        while (!guard.IsLeavingMap(map))
         {
-            GuardDirection.Up => guard.Y == 0,
-            GuardDirection.Right => guard.X == map[0].Length - 1,
-            GuardDirection.Down => guard.Y == map.Length - 1,
-            GuardDirection.Left => guard.X == 0,
-            _ => throw new ArgumentOutOfRangeException()
-        };
-    }
-    
-    
-    private static (GuardPosition NewPosition, ObstaclePosition? ObstaclePosition) MoveGuard(GuardPosition guard, char[][] map)
-    {
-        if (guard.IsBlocked(map))
-            return (guard.TurnRight(map), null);
+            guard = guard.TakeStep(map);
+            if (!possibleObstaclePositions.Contains(guard.Position))
+            {
+                possibleObstaclePositions.Add(guard.Position);
+            }
+        }
 
-        var obstacle = guard.GetObstacleIfLooped(guard, map);
-        return (guard.MoveForward(map), obstacle);
+        possibleObstaclePositions.Remove(startPosition.Position);
+
+        var numberOfValidObstaclePositions = 0;
+
+        Parallel.ForEach(possibleObstaclePositions, obstaclePosition =>
+        {
+            if (startPosition.RunsInLoop(map, obstaclePosition))
+            {
+                numberOfValidObstaclePositions++;
+            }
+        });
+        
+        Console.WriteLine($"There are {numberOfValidObstaclePositions} obstacle positions that would cause a loop.");
     }
 
     private static (char[][] Map, GuardPosition Guard) ParseInput()
@@ -46,7 +38,7 @@ class Program
         var input = File.ReadAllLines("input.txt");
 
         var map = new char[input.Length][];
-        GuardPosition guard = new(0, 0, GuardDirection.Up);
+        GuardPosition guard = new(new(0, 0), GuardDirection.Up);
 
         for (var i = 0; i < input.Length; i++)
         {
@@ -55,8 +47,7 @@ class Program
             var guardPosition = input[i].IndexOf('^');
             if (guardPosition > 0)
             {
-                guard = new GuardPosition(guardPosition, i, GuardDirection.Up);
-                map[i][guardPosition] = 'X';
+                guard = new (new(guardPosition, i), GuardDirection.Up);
             }
         }
         
@@ -64,125 +55,83 @@ class Program
     }
 }
 
-internal record ObstaclePosition(int X, int Y);
+internal record GridPosition(int X, int Y);
 
-internal record GuardPosition(int X, int Y, GuardDirection Direction)
+internal record GuardPosition(GridPosition Position, GuardDirection Direction)
 {
-    public bool IsBlocked(char[][] map)
+    private bool IsBlocked(char[][] map, GridPosition? obstaclePosition)
+    {
+        var forwardPosition = GetForwardPosition();
+        
+        if(obstaclePosition != null && forwardPosition == obstaclePosition)
+            return true;
+        
+        return map[forwardPosition.Y][forwardPosition.X] == '#';
+    }
+    
+    public bool IsLeavingMap(char[][] map)
     {
         return Direction switch
         {
-            GuardDirection.Up => map[Y - 1][X] == '#',
-            GuardDirection.Right => map[Y][X + 1] == '#',
-            GuardDirection.Down => map[Y + 1][X] == '#',
-            GuardDirection.Left => map[Y][X - 1] == '#',
+            GuardDirection.Up => Position.Y == 0,
+            GuardDirection.Right => Position.X == map[0].Length - 1,
+            GuardDirection.Down => Position.Y == map.Length - 1,
+            GuardDirection.Left => Position.X == 0,
             _ => throw new ArgumentOutOfRangeException()
         };
     }
 
-    public GuardPosition TurnRight(char[][] map)
+    private GuardPosition TurnRight()
     {
-        char[] overWritePositions = ['.', 'X', '<', '>', '^', 'v'];
-        switch (Direction)
-        {
-            case GuardDirection.Up:
-                if (overWritePositions.Contains(map[Y][X]))
-                    map[Y][X] = '^';
-                break;
-            case GuardDirection.Right:
-                if (overWritePositions.Contains(map[Y][X]))
-                    map[Y][X] = '>';
-                break;
-            case GuardDirection.Down:
-                if (overWritePositions.Contains(map[Y][X]))
-                    map[Y][X] = 'v';
-                break;
-            case GuardDirection.Left:
-                if (overWritePositions.Contains(map[Y][X]))
-                    map[Y][X] = '<';
-                break;
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
         var newDirection = (GuardDirection)(((int)Direction + 1) % 4);
         
         return this with { Direction = newDirection };
     }
 
-    public GuardPosition MoveForward(char[][] map)
+    private GuardPosition MoveForward()
     {
-        if (map[Y][X] == '.')
-            map[Y][X] = 'X';
-        
+        return this with { Position = GetForwardPosition() };
+    }
+    
+    public GridPosition GetForwardPosition()
+    {
         return Direction switch
         {
-            GuardDirection.Up => this with { Y = Y - 1 },
-            GuardDirection.Right => this with { X = X + 1 },
-            GuardDirection.Down => this with { Y = Y + 1 },
-            GuardDirection.Left => this with { X = X - 1 },
+            GuardDirection.Up => Position with { Y = Position.Y - 1 },
+            GuardDirection.Right => Position with { X = Position.X + 1 },
+            GuardDirection.Down => Position with { Y = Position.Y + 1 },
+            GuardDirection.Left => Position with { X = Position.X - 1 },
             _ => throw new ArgumentOutOfRangeException()
         };
     }
-
-    public ObstaclePosition? GetObstacleIfLooped(GuardPosition guard, char[][] map)
+    
+    public GuardPosition TakeStep(char[][] map, GridPosition? obstaclePosition = null)
     {
-        char[] turnPositions = ['<', '>', '^', 'v'];
-        
-        switch (Direction)
-        {
-            case GuardDirection.Up:
-                if (map[Y - 1][X] != '.')
-                    return null;
-                for (var x = X; x < map[0].Length; x++)
-                {
-                    if(map[Y][x] == '#')
-                        if(turnPositions.Contains(map[Y][x - 1]))
-                            return new ObstaclePosition(Y-1, X);
-                        else
-                            return null;
-                }
-                break;
-            case GuardDirection.Right:
-                if (map[Y][X + 1] != '.')
-                    return null;
-                for (var y = Y; y < map.Length; y++)
-                {
-                    if(map[y][X] == '#')
-                        if(turnPositions.Contains(map[y-1][X]))
-                            return new ObstaclePosition(Y, X+1);
-                        else
-                            return null;
-                }
-                break;
-            case GuardDirection.Down:
-                if (map[Y + 1][X] != '.')
-                    return null;
-                for (var x = X; x >= 0 ; x--)
-                {
-                    if(map[Y][x] == '#')
-                        if(turnPositions.Contains(map[Y][x + 1]))
-                            return new ObstaclePosition(Y+1, X);
-                        else
-                            return null;
-                }
-                break;
-            case GuardDirection.Left:
-                if (map[Y][X - 1] != '.')
-                    return null;
-                for (var y = Y; y >= 0; y--)
-                {
-                    if(map[y][X] == '#')
-                        if(turnPositions.Contains(map[y+1][X]))
-                            return new ObstaclePosition(Y, X-1);
-                        else
-                            return null;
-                }
-                break;
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
+        if (IsBlocked(map, obstaclePosition))
+            return TurnRight();
 
-        return null;
+        return MoveForward();
+    }
+
+    public bool RunsInLoop(char[][] map, GridPosition obstaclePosition)
+    {
+        var currentGuard = this;
+        
+        List<GuardPosition> guardPath = [this];
+        
+        do
+        {
+            currentGuard = currentGuard.TakeStep(map, obstaclePosition);
+            
+            if (guardPath.Any(pos => currentGuard.Position.Equals(pos.Position) &&
+                currentGuard.Direction == pos.Direction))
+                return true;
+            
+            guardPath.Add(currentGuard);
+        }
+        while (!currentGuard.IsLeavingMap(map)) ;
+        
+        return false;
     }
 }
 
